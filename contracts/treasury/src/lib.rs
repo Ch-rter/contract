@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, panic_with_error, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, panic_with_error, Address, Env, String, Vec};
 
 mod errors;
 mod events;
@@ -128,6 +128,92 @@ impl TreasuryContract {
             panic_with_error!(&env, Error::InvalidThreshold);
         }
         env.storage().instance().set(&DataKey::Threshold, &threshold);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Creates a new budget category.
+    ///
+    /// The category starts active with zero spend.
+    ///
+    /// # Auth
+    /// * Requires the stored `admin` to sign (`Error::NotAdmin` otherwise).
+    ///
+    /// # Panics
+    /// * `Error::InvalidAmount` if `cap <= 0`.
+    ///
+    /// # Returns
+    /// * The assigned category id.
+    pub fn create_category(env: Env, admin: Address, name: String, cap: i128) -> u32 {
+        Self::require_admin(&env, &admin);
+        if cap <= 0 {
+            panic_with_error!(&env, Error::InvalidAmount);
+        }
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CategoryCount)
+            .unwrap_or(0);
+        let id = count + 1;
+        let category = Category {
+            name,
+            cap,
+            spent: 0,
+            active: true,
+        };
+        let key = DataKey::Category(id);
+        env.storage().persistent().set(&key, &category);
+        env.storage().persistent().extend_ttl(&key, 100, 100);
+        env.storage().instance().set(&DataKey::CategoryCount, &id);
+        events::category_created(&env, id, &category.name, cap);
+        Self::extend_instance_ttl(&env);
+        id
+    }
+
+    /// Updates a category's spend cap.
+    ///
+    /// # Auth
+    /// * Requires the stored `admin` to sign (`Error::NotAdmin` otherwise).
+    ///
+    /// # Panics
+    /// * `Error::InvalidAmount` if `new_cap < category.spent` — the cap can
+    ///   never be set below what has already been released against it.
+    pub fn update_category_cap(env: Env, admin: Address, category_id: u32, new_cap: i128) {
+        Self::require_admin(&env, &admin);
+        let key = DataKey::Category(category_id);
+        let mut category: Category = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::InvalidAmount));
+        if new_cap < category.spent {
+            panic_with_error!(&env, Error::InvalidAmount);
+        }
+        category.cap = new_cap;
+        env.storage().persistent().set(&key, &category);
+        env.storage().persistent().extend_ttl(&key, 100, 100);
+        events::category_cap_updated(&env, category_id, new_cap);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Activates or deactivates a category.
+    ///
+    /// Inactive categories reject new `submit_request` calls; existing
+    /// requests remain resolvable. Categories are never deleted.
+    ///
+    /// # Auth
+    /// * Requires the stored `admin` to sign (`Error::NotAdmin` otherwise).
+    pub fn set_category_active(env: Env, admin: Address, category_id: u32, active: bool) {
+        Self::require_admin(&env, &admin);
+        let key = DataKey::Category(category_id);
+        let mut category: Category = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::InvalidAmount));
+        category.active = active;
+        env.storage().persistent().set(&key, &category);
+        env.storage().persistent().extend_ttl(&key, 100, 100);
+        events::category_active_changed(&env, category_id, active);
         Self::extend_instance_ttl(&env);
     }
 }
