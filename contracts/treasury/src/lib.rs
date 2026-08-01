@@ -46,7 +46,7 @@ impl TreasuryContract {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
-        if threshold == 0 || threshold as usize > approvers.len() as usize {
+        if threshold == 0 || threshold > approvers.len() {
             panic_with_error!(&env, Error::InvalidThreshold);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -57,10 +57,95 @@ impl TreasuryContract {
         env.storage().instance().set(&DataKey::RequestCount, &0u32);
         Self::extend_instance_ttl(&env);
     }
+
+    /// Adds an approver to the treasury.
+    ///
+    /// No-op if the address is already an approver.
+    ///
+    /// # Auth
+    /// * Requires the stored `admin` to sign (`Error::NotAdmin` otherwise).
+    pub fn add_approver(env: Env, admin: Address, approver: Address) {
+        Self::require_admin(&env, &admin);
+        let mut approvers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Approvers)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        if !approvers.contains(&approver) {
+            approvers.push_back(approver.clone());
+            env.storage().instance().set(&DataKey::Approvers, &approvers);
+        }
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Removes an approver from the treasury.
+    ///
+    /// # Auth
+    /// * Requires the stored `admin` to sign (`Error::NotAdmin` otherwise).
+    ///
+    /// # Panics
+    /// * `Error::InvalidThreshold` if removal would drop `approvers.len()`
+    ///   below `threshold`, which would leave the treasury unable to reach
+    ///   quorum.
+    pub fn remove_approver(env: Env, admin: Address, approver: Address) {
+        Self::require_admin(&env, &admin);
+        let mut approvers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Approvers)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        if let Some(index) = approvers.first_index_of(&approver) {
+            approvers.remove(index);
+            let threshold: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::Threshold)
+                .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+            if approvers.len() < threshold {
+                panic_with_error!(&env, Error::InvalidThreshold);
+            }
+            env.storage().instance().set(&DataKey::Approvers, &approvers);
+        }
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Updates the approval threshold.
+    ///
+    /// # Auth
+    /// * Requires the stored `admin` to sign (`Error::NotAdmin` otherwise).
+    ///
+    /// # Panics
+    /// * `Error::InvalidThreshold` if `threshold == 0` or exceeds
+    ///   `approvers.len()`.
+    pub fn set_threshold(env: Env, admin: Address, threshold: u32) {
+        Self::require_admin(&env, &admin);
+        let approvers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Approvers)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        if threshold < 1 || threshold > approvers.len() {
+            panic_with_error!(&env, Error::InvalidThreshold);
+        }
+        env.storage().instance().set(&DataKey::Threshold, &threshold);
+        Self::extend_instance_ttl(&env);
+    }
 }
 
 impl TreasuryContract {
     fn extend_instance_ttl(env: &Env) {
         env.storage().instance().extend_ttl(100, 100);
+    }
+
+    fn require_admin(env: &Env, admin: &Address) {
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+        if &stored != admin {
+            panic_with_error!(env, Error::NotAdmin);
+        }
+        admin.require_auth();
     }
 }
