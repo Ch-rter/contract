@@ -33,7 +33,7 @@ pub struct Category {
 
 /// Lifecycle state of a disbursement request.
 #[contracttype]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RequestStatus {
     Pending,
     Executed,

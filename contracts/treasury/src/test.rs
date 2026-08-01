@@ -1,4 +1,4 @@
-use crate::{TreasuryContract, TreasuryContractClient};
+use crate::{RequestStatus, TreasuryContract, TreasuryContractClient};
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::token::StellarAssetClient;
 use soroban_sdk::{vec, Address, Env, IntoVal, String, Symbol, Vec};
@@ -251,4 +251,305 @@ fn test_set_category_active_flips_flag() {
     assert!(!ctx.client.get_category(&id).active);
     ctx.client.set_category_active(&ctx.admin, &id, &true);
     assert!(ctx.client.get_category(&id).active);
+}
+
+#[test]
+fn test_submit_request_returns_id_and_stores_request() {
+    let ctx = TestContext::new(2);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    assert_eq!(req_id, 1);
+
+    let request = ctx.client.get_request(&req_id);
+    assert_eq!(request.id, req_id);
+    assert_eq!(request.category_id, id);
+    assert_eq!(request.recipient, ctx.recipient);
+    assert_eq!(request.amount, 1_000);
+    assert_eq!(request.memo, String::from_str(&ctx.env, "stipend"));
+    assert_eq!(request.requester, ctx.requester);
+    assert_eq!(request.approvals.len(), 0);
+    assert_eq!(request.status, RequestStatus::Pending);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_submit_request_inactive_category_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    ctx.client.set_category_active(&ctx.admin, &id, &false);
+    ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_submit_request_zero_amount_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &0,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_submit_request_cap_exceeded_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &5_001,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+}
+
+#[test]
+fn test_get_requests_by_category_filters() {
+    let ctx = TestContext::new(1);
+    let ops = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let growth =
+        ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Growth"), &20_000);
+    let req1 = ctx.client.submit_request(
+        &ctx.requester,
+        &ops,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "a"),
+    );
+    let req2 = ctx.client.submit_request(
+        &ctx.requester,
+        &growth,
+        &ctx.recipient,
+        &2_000,
+        &String::from_str(&ctx.env, "b"),
+    );
+    let req3 = ctx.client.submit_request(
+        &ctx.requester,
+        &ops,
+        &ctx.recipient,
+        &3_000,
+        &String::from_str(&ctx.env, "c"),
+    );
+
+    let ops_requests = ctx.client.get_requests_by_category(&ops);
+    assert_eq!(ops_requests.len(), 2);
+    assert_eq!(ops_requests.get(0).unwrap().id, req1);
+    assert_eq!(ops_requests.get(1).unwrap().id, req3);
+
+    let growth_requests = ctx.client.get_requests_by_category(&growth);
+    assert_eq!(growth_requests.len(), 1);
+    assert_eq!(growth_requests.get(0).unwrap().id, req2);
+}
+
+#[test]
+fn test_approve_request_accumulates_until_threshold() {
+    let ctx = TestContext::new(2);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+
+    // First approval: below threshold of 2, request stays pending.
+    ctx.client.approve_request(&ctx.approver1, &req_id);
+    let request = ctx.client.get_request(&req_id);
+    assert_eq!(request.approvals.len(), 1);
+    assert_eq!(request.approvals.get(0).unwrap(), ctx.approver1);
+    assert_eq!(request.status, RequestStatus::Pending);
+}
+
+#[test]
+fn test_approve_request_auto_executes_at_threshold() {
+    let ctx = TestContext::new(2);
+    ctx.fund_treasury(5_000);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+
+    let recipient_before = StellarAssetClient::new(&ctx.env, &ctx.token).balance(&ctx.recipient);
+    ctx.client.approve_request(&ctx.approver1, &req_id);
+    ctx.client.approve_request(&ctx.approver2, &req_id);
+
+    let request = ctx.client.get_request(&req_id);
+    assert_eq!(request.status, RequestStatus::Executed);
+    assert_eq!(request.approvals.len(), 2);
+
+    // Recipient received the funds and the category spent is incremented.
+    let recipient_after = StellarAssetClient::new(&ctx.env, &ctx.token).balance(&ctx.recipient);
+    assert_eq!(recipient_after - recipient_before, 1_000);
+    assert_eq!(ctx.client.get_category(&id).spent, 1_000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_approve_request_not_approver_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.approve_request(&ctx.requester, &req_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_approve_request_twice_panics() {
+    let ctx = TestContext::new(2);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.approve_request(&ctx.approver1, &req_id);
+    ctx.client.approve_request(&ctx.approver1, &req_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_approve_request_not_pending_panics() {
+    let ctx = TestContext::new(1);
+    ctx.fund_treasury(5_000);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.approve_request(&ctx.approver1, &req_id);
+    // Already executed; approving again must panic.
+    ctx.client.approve_request(&ctx.approver2, &req_id);
+}
+
+#[test]
+fn test_reject_request_sets_status() {
+    let ctx = TestContext::new(2);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.reject_request(&ctx.approver1, &req_id);
+    assert_eq!(ctx.client.get_request(&req_id).status, RequestStatus::Rejected);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_reject_request_not_approver_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.reject_request(&ctx.requester, &req_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_reject_request_not_pending_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.reject_request(&ctx.approver1, &req_id);
+    ctx.client.reject_request(&ctx.approver2, &req_id);
+}
+
+#[test]
+fn test_cancel_request_by_requester() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.cancel_request(&ctx.requester, &req_id);
+    assert_eq!(ctx.client.get_request(&req_id).status, RequestStatus::Cancelled);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_cancel_request_not_requester_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.cancel_request(&ctx.approver1, &req_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_cancel_request_not_pending_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    let req_id = ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+    ctx.client.cancel_request(&ctx.requester, &req_id);
+    ctx.client.cancel_request(&ctx.requester, &req_id);
+}
+
+#[test]
+fn test_get_balance_reflects_funding() {
+    let ctx = TestContext::new(1);
+    assert_eq!(ctx.client.get_balance(), 0);
+    ctx.fund_treasury(5_000);
+    assert_eq!(ctx.client.get_balance(), 5_000);
 }
