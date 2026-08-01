@@ -10,11 +10,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 soroban-sdk = { workspace = true }
-charter-treasury = { path = "../treasury" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-charter-treasury = { path = "../treasury", features = ["testutils"] }
 
 [features]
-testutils = ["soroban-sdk/testutils", "charter-treasury/testutils"]
+testutils = ["soroban-sdk/testutils"]

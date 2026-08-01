@@ -286,7 +286,6 @@ dependencies = [
 name = "charter-factory"
 version = "0.1.0"
 dependencies = [
- "charter-treasury",
  "soroban-sdk",
 ]
 
