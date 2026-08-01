@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, panic_with_error, Address, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, panic_with_error, token, Address, Env, MuxedAddress, String, Vec};
 
 mod errors;
 mod events;
@@ -214,6 +214,32 @@ impl TreasuryContract {
         env.storage().persistent().set(&key, &category);
         env.storage().persistent().extend_ttl(&key, 100, 100);
         events::category_active_changed(&env, category_id, active);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Deposits funds into the treasury's general balance.
+    ///
+    /// Deposits fund the treasury as a whole; categories are spend-side
+    /// accounting only, not separate token balances.
+    ///
+    /// # Auth
+    /// * Requires `from.require_auth()`.
+    ///
+    /// # Panics
+    /// * `Error::InvalidAmount` if `amount <= 0`.
+    pub fn deposit(env: Env, from: Address, amount: i128) {
+        from.require_auth();
+        if amount <= 0 {
+            panic_with_error!(&env, Error::InvalidAmount);
+        }
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        let token_client = token::TokenClient::new(&env, &token);
+        token_client.transfer(&from, &MuxedAddress::from(env.current_contract_address()), &amount);
+        events::deposited(&env, &from, amount);
         Self::extend_instance_ttl(&env);
     }
 }
