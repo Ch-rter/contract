@@ -6,6 +6,9 @@ mod errors;
 mod events;
 mod types;
 
+#[cfg(any(test, feature = "testutils"))]
+mod test;
+
 pub use errors::*;
 pub use types::*;
 
@@ -164,7 +167,12 @@ impl TreasuryContract {
         env.storage().persistent().set(&key, &category);
         env.storage().persistent().extend_ttl(&key, 100, 100);
         env.storage().instance().set(&DataKey::CategoryCount, &id);
-        events::category_created(&env, id, &category.name, cap);
+        events::CategoryCreated {
+            category_id: id,
+            name: category.name.clone(),
+            cap,
+        }
+        .publish(&env);
         Self::extend_instance_ttl(&env);
         id
     }
@@ -191,7 +199,11 @@ impl TreasuryContract {
         category.cap = new_cap;
         env.storage().persistent().set(&key, &category);
         env.storage().persistent().extend_ttl(&key, 100, 100);
-        events::category_cap_updated(&env, category_id, new_cap);
+        events::CapUpdated {
+            category_id,
+            new_cap,
+        }
+        .publish(&env);
         Self::extend_instance_ttl(&env);
     }
 
@@ -213,7 +225,11 @@ impl TreasuryContract {
         category.active = active;
         env.storage().persistent().set(&key, &category);
         env.storage().persistent().extend_ttl(&key, 100, 100);
-        events::category_active_changed(&env, category_id, active);
+        events::ActiveChanged {
+            category_id,
+            active,
+        }
+        .publish(&env);
         Self::extend_instance_ttl(&env);
     }
 
@@ -239,7 +255,11 @@ impl TreasuryContract {
             .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
         let token_client = token::TokenClient::new(&env, &token);
         token_client.transfer(&from, &MuxedAddress::from(env.current_contract_address()), &amount);
-        events::deposited(&env, &from, amount);
+        events::Deposited {
+            from: from.clone(),
+            amount,
+        }
+        .publish(&env);
         Self::extend_instance_ttl(&env);
     }
 
@@ -297,7 +317,13 @@ impl TreasuryContract {
         env.storage().persistent().set(&request_key, &request);
         env.storage().persistent().extend_ttl(&request_key, 100, 100);
         env.storage().instance().set(&DataKey::RequestCount, &id);
-        events::request_submitted(&env, id, category_id, &recipient, amount);
+        events::RequestSubmitted {
+            request_id: id,
+            category_id,
+            recipient: recipient.clone(),
+            amount,
+        }
+        .publish(&env);
         Self::extend_instance_ttl(&env);
         id
     }
@@ -372,11 +398,20 @@ impl TreasuryContract {
             env.storage().persistent().set(&request_key, &request);
             env.storage().persistent().extend_ttl(&request_key, 100, 100);
 
-            events::request_executed(&env, request_id, &request.recipient, request.amount);
+            events::RequestExecuted {
+                request_id,
+                recipient: request.recipient.clone(),
+                amount: request.amount,
+            }
+            .publish(&env);
         } else {
             env.storage().persistent().set(&request_key, &request);
             env.storage().persistent().extend_ttl(&request_key, 100, 100);
-            events::request_approved(&env, request_id, &approver);
+            events::RequestApproved {
+                request_id,
+                approver: approver.clone(),
+            }
+            .publish(&env);
         }
         Self::extend_instance_ttl(&env);
     }
@@ -412,7 +447,11 @@ impl TreasuryContract {
         request.status = RequestStatus::Rejected;
         env.storage().persistent().set(&request_key, &request);
         env.storage().persistent().extend_ttl(&request_key, 100, 100);
-        events::request_rejected(&env, request_id, &approver);
+        events::RequestRejected {
+            request_id,
+            approver: approver.clone(),
+        }
+        .publish(&env);
         Self::extend_instance_ttl(&env);
     }
 
@@ -441,7 +480,7 @@ impl TreasuryContract {
         request.status = RequestStatus::Cancelled;
         env.storage().persistent().set(&request_key, &request);
         env.storage().persistent().extend_ttl(&request_key, 100, 100);
-        events::request_cancelled(&env, request_id);
+        events::RequestCancelled { request_id }.publish(&env);
         Self::extend_instance_ttl(&env);
     }
 
