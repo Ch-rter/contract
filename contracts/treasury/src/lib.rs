@@ -301,6 +301,85 @@ impl TreasuryContract {
         Self::extend_instance_ttl(&env);
         id
     }
+
+    /// Approves a pending request, auto-executing when threshold is reached.
+    ///
+    /// Once `approvals.len() >= threshold` the request executes: funds
+    /// transfer to the recipient and the category's `spent` is incremented.
+    ///
+    /// # Auth
+    /// * Requires `approver.require_auth()` and that `approver` is in the
+    ///   stored approver list (`Error::NotApprover` otherwise).
+    ///
+    /// # Panics
+    /// * `Error::RequestNotPending` if the request is not pending.
+    /// * `Error::AlreadyApproved` if the approver already signed off.
+    pub fn approve_request(env: Env, approver: Address, request_id: u32) {
+        approver.require_auth();
+        let approvers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Approvers)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        if !approvers.contains(&approver) {
+            panic_with_error!(&env, Error::NotApprover);
+        }
+
+        let request_key = DataKey::Request(request_id);
+        let mut request: Request = env
+            .storage()
+            .persistent()
+            .get(&request_key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::RequestNotPending));
+        if request.status != RequestStatus::Pending {
+            panic_with_error!(&env, Error::RequestNotPending);
+        }
+        if request.approvals.contains(&approver) {
+            panic_with_error!(&env, Error::AlreadyApproved);
+        }
+
+        request.approvals.push_back(approver.clone());
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+
+        if request.approvals.len() >= threshold {
+            let token: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Token)
+                .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+            let token_client = token::TokenClient::new(&env, &token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &MuxedAddress::from(request.recipient.clone()),
+                &request.amount,
+            );
+
+            let category_key = DataKey::Category(request.category_id);
+            let mut category: Category = env
+                .storage()
+                .persistent()
+                .get(&category_key)
+                .unwrap_or_else(|| panic_with_error!(&env, Error::InvalidAmount));
+            category.spent += request.amount;
+            env.storage().persistent().set(&category_key, &category);
+            env.storage().persistent().extend_ttl(&category_key, 100, 100);
+
+            request.status = RequestStatus::Executed;
+            env.storage().persistent().set(&request_key, &request);
+            env.storage().persistent().extend_ttl(&request_key, 100, 100);
+
+            events::request_executed(&env, request_id, &request.recipient, request.amount);
+        } else {
+            env.storage().persistent().set(&request_key, &request);
+            env.storage().persistent().extend_ttl(&request_key, 100, 100);
+            events::request_approved(&env, request_id, &approver);
+        }
+        Self::extend_instance_ttl(&env);
+    }
 }
 
 impl TreasuryContract {
