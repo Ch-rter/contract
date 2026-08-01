@@ -242,6 +242,65 @@ impl TreasuryContract {
         events::deposited(&env, &from, amount);
         Self::extend_instance_ttl(&env);
     }
+
+    /// Submits a disbursement request against a budget category.
+    ///
+    /// # Auth
+    /// * Requires `requester.require_auth()`.
+    ///
+    /// # Panics
+    /// * `Error::CategoryInactive` if the category is not active.
+    /// * `Error::InvalidAmount` if `amount <= 0` or the remaining category cap
+    ///   is insufficient.
+    ///
+    /// # Returns
+    /// * The assigned request id.
+    pub fn submit_request(
+        env: Env,
+        requester: Address,
+        category_id: u32,
+        recipient: Address,
+        amount: i128,
+        memo: String,
+    ) -> u32 {
+        requester.require_auth();
+        let category_key = DataKey::Category(category_id);
+        let category: Category = env
+            .storage()
+            .persistent()
+            .get(&category_key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::InvalidAmount));
+        if !category.active {
+            panic_with_error!(&env, Error::CategoryInactive);
+        }
+        if amount <= 0 || category.cap - category.spent < amount {
+            panic_with_error!(&env, Error::InvalidAmount);
+        }
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RequestCount)
+            .unwrap_or(0);
+        let id = count + 1;
+        let request = Request {
+            id,
+            category_id,
+            recipient: recipient.clone(),
+            amount,
+            memo,
+            requester: requester.clone(),
+            approvals: Vec::new(&env),
+            status: RequestStatus::Pending,
+            created_ledger: env.ledger().sequence(),
+        };
+        let request_key = DataKey::Request(id);
+        env.storage().persistent().set(&request_key, &request);
+        env.storage().persistent().extend_ttl(&request_key, 100, 100);
+        env.storage().instance().set(&DataKey::RequestCount, &id);
+        events::request_submitted(&env, id, category_id, &recipient, amount);
+        Self::extend_instance_ttl(&env);
+        id
+    }
 }
 
 impl TreasuryContract {
