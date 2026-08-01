@@ -553,3 +553,100 @@ fn test_get_balance_reflects_funding() {
     ctx.fund_treasury(5_000);
     assert_eq!(ctx.client.get_balance(), 5_000);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_add_approver_not_admin_panics() {
+    let ctx = TestContext::new(1);
+    ctx.client.add_approver(&ctx.requester, &Address::generate(&ctx.env));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_remove_approver_not_admin_panics() {
+    let ctx = TestContext::new(1);
+    ctx.client.remove_approver(&ctx.requester, &ctx.approver3);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_set_threshold_not_admin_panics() {
+    let ctx = TestContext::new(1);
+    ctx.client.set_threshold(&ctx.requester, &2);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_create_category_not_admin_panics() {
+    let ctx = TestContext::new(1);
+    ctx.client.create_category(&ctx.requester, &String::from_str(&ctx.env, "Ops"), &5_000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_update_category_cap_not_admin_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    ctx.client.update_category_cap(&ctx.requester, &id, &8_000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_set_category_active_not_admin_panics() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    ctx.client.set_category_active(&ctx.requester, &id, &false);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_approve_request_not_initialized_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &contract_id);
+    client.approve_request(&Address::generate(&env), &1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_deposit_not_initialized_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &contract_id);
+    client.deposit(&Address::generate(&env), &1_000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_deposit_zero_amount_panics() {
+    let ctx = TestContext::new(1);
+    ctx.client.deposit(&ctx.requester, &0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_submit_request_category_missing_panics() {
+    let ctx = TestContext::new(1);
+    ctx.client.submit_request(
+        &ctx.requester,
+        &999,
+        &ctx.recipient,
+        &1_000,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+}
+
+#[test]
+fn test_deposit_moves_funds() {
+    let ctx = TestContext::new(1);
+    let stellar = StellarAssetClient::new(&ctx.env, &ctx.token);
+    stellar.mint(&ctx.requester, &5_000);
+    ctx.client.deposit(&ctx.requester, &1_000);
+    assert_eq!(ctx.client.get_balance(), 1_000);
+    assert_eq!(
+        StellarAssetClient::new(&ctx.env, &ctx.token).balance(&ctx.requester),
+        4_000
+    );
+}
