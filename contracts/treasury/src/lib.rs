@@ -444,6 +444,93 @@ impl TreasuryContract {
         events::request_cancelled(&env, request_id);
         Self::extend_instance_ttl(&env);
     }
+
+    /// Returns a category by id.
+    ///
+    /// # Panics
+    /// * `Error::InvalidAmount` if the category does not exist.
+    pub fn get_category(env: Env, category_id: u32) -> Category {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Category(category_id))
+            .unwrap_or_else(|| panic_with_error!(&env, Error::InvalidAmount))
+    }
+
+    /// Returns every category in creation order.
+    pub fn get_categories(env: Env) -> Vec<Category> {
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CategoryCount)
+            .unwrap_or(0);
+        let mut categories: Vec<Category> = Vec::new(&env);
+        for id in 1..=count {
+            if let Some(category) = env.storage().persistent().get(&DataKey::Category(id)) {
+                categories.push_back(category);
+            }
+        }
+        categories
+    }
+
+    /// Returns a request by id.
+    ///
+    /// # Panics
+    /// * `Error::RequestNotPending` if the request does not exist.
+    pub fn get_request(env: Env, request_id: u32) -> Request {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Request(request_id))
+            .unwrap_or_else(|| panic_with_error!(&env, Error::RequestNotPending))
+    }
+
+    /// Returns all requests against a given category.
+    pub fn get_requests_by_category(env: Env, category_id: u32) -> Vec<Request> {
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RequestCount)
+            .unwrap_or(0);
+        let mut requests: Vec<Request> = Vec::new(&env);
+        for id in 1..=count {
+            if let Some(request) = env
+                .storage()
+                .persistent()
+                .get::<_, Request>(&DataKey::Request(id))
+            {
+                if request.category_id == category_id {
+                    requests.push_back(request);
+                }
+            }
+        }
+        requests
+    }
+
+    /// Returns the treasury's token balance.
+    pub fn get_balance(env: Env) -> i128 {
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        let token_client = token::TokenClient::new(&env, &token);
+        token_client.balance(&env.current_contract_address())
+    }
+
+    /// Returns the stored approver list.
+    pub fn get_approvers(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Approvers)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized))
+    }
+
+    /// Returns the stored approval threshold.
+    pub fn get_threshold(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized))
+    }
 }
 
 impl TreasuryContract {
