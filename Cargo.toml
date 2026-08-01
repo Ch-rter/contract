@@ -12,7 +12,7 @@ license = "MIT"
 authors = ["Charter"]
 
 [workspace.dependencies]
-soroban-sdk = { version = "26.0.0" }
+soroban-sdk = { version = "=26.0.0" }
 
 [profile.release]
 opt-level = "z"
