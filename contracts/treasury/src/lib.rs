@@ -380,6 +380,70 @@ impl TreasuryContract {
         }
         Self::extend_instance_ttl(&env);
     }
+
+    /// Rejects a pending request.
+    ///
+    /// # Auth
+    /// * Requires `approver.require_auth()` and that `approver` is in the
+    ///   stored approver list (`Error::NotApprover` otherwise).
+    ///
+    /// # Panics
+    /// * `Error::RequestNotPending` if the request is not pending.
+    pub fn reject_request(env: Env, approver: Address, request_id: u32) {
+        approver.require_auth();
+        let approvers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Approvers)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        if !approvers.contains(&approver) {
+            panic_with_error!(&env, Error::NotApprover);
+        }
+
+        let request_key = DataKey::Request(request_id);
+        let mut request: Request = env
+            .storage()
+            .persistent()
+            .get(&request_key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::RequestNotPending));
+        if request.status != RequestStatus::Pending {
+            panic_with_error!(&env, Error::RequestNotPending);
+        }
+        request.status = RequestStatus::Rejected;
+        env.storage().persistent().set(&request_key, &request);
+        env.storage().persistent().extend_ttl(&request_key, 100, 100);
+        events::request_rejected(&env, request_id, &approver);
+        Self::extend_instance_ttl(&env);
+    }
+
+    /// Cancels a pending request.
+    ///
+    /// # Auth
+    /// * Requires `requester.require_auth()` and that `requester` is the
+    ///   request's original submitter (`Error::NotRequester` otherwise).
+    ///
+    /// # Panics
+    /// * `Error::RequestNotPending` if the request is not pending.
+    pub fn cancel_request(env: Env, requester: Address, request_id: u32) {
+        requester.require_auth();
+        let request_key = DataKey::Request(request_id);
+        let mut request: Request = env
+            .storage()
+            .persistent()
+            .get(&request_key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::RequestNotPending));
+        if request.status != RequestStatus::Pending {
+            panic_with_error!(&env, Error::RequestNotPending);
+        }
+        if request.requester != requester {
+            panic_with_error!(&env, Error::NotRequester);
+        }
+        request.status = RequestStatus::Cancelled;
+        env.storage().persistent().set(&request_key, &request);
+        env.storage().persistent().extend_ttl(&request_key, 100, 100);
+        events::request_cancelled(&env, request_id);
+        Self::extend_instance_ttl(&env);
+    }
 }
 
 impl TreasuryContract {
