@@ -76,6 +76,8 @@ impl FactoryContract {
     /// # Auth
     /// * Requires the stored `deployer` to sign (`Error::NotDeployer`
     ///   otherwise).
+    /// * Requires `admin` to sign so the treasury's `initialize` sub-call
+    ///   succeeds on-chain.
     ///
     /// # Panics
     /// * `Error::NotInitialized` if the factory was not initialized.
@@ -93,6 +95,10 @@ impl FactoryContract {
             .get(&DataKey::Deployer)
             .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
         deployer.require_auth();
+        // The treasury's `initialize` calls `admin.require_auth()`. Requiring
+        // the admin's signature at the top invocation ties it to the root call
+        // so the sub-call auth succeeds.
+        admin.require_auth();
         let wasm_hash: BytesN<32> = env
             .storage()
             .instance()
