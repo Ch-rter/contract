@@ -15,7 +15,7 @@ DEPLOYER="${DEPLOYER:-charter-deployer}"
 ADMIN="${ADMIN:-charter-admin}"
 APPROVER="${APPROVER:-charter-approver}"
 APPROVER2="${APPROVER2:-charter-approver2}"
-TOKEN="${TOKEN:-USDC}"   # issuer-neutral symbol; override with a token address as needed
+TOKEN="${TOKEN:-${USDC_ADDRESS:-}}"
 ENV_FILE="scripts/.env"
 
 [ -f "${ENV_FILE}" ] && source "${ENV_FILE}"
@@ -45,11 +45,22 @@ stellar contract invoke \
     --limit 5
 
 if [ "${1:-}" = "deploy-treasury" ]; then
+    if [ -z "${TOKEN}" ]; then
+        echo "TOKEN address not set. Run scripts/deploy.sh first or export TOKEN=<contract id>." >&2
+        exit 1
+    fi
     echo "=== Deploying a treasury ==="
-    ADMIN_ADDRESS="$(stellar keys public-key "${ADMIN}")"
     APPROVER_ADDRESS="$(stellar keys public-key "${APPROVER}")"
     APPROVER2_ADDRESS="$(stellar keys public-key "${APPROVER2}")"
+    APPROVERS_JSON="$(mktemp)"
+    # shellcheck disable=SC2086
+    printf '["%s","%s"]' "${APPROVER_ADDRESS}" "${APPROVER2_ADDRESS}" > "${APPROVERS_JSON}"
+    trap 'rm -f "${APPROVERS_JSON}"' EXIT
 
+    # NOTE: --admin must be the identity NAME, not the public key. The CLI only
+    # collects auth-entry signers for top-level Address args it can resolve to a
+    # stored secret key; a raw G... strkey has no key and fails with
+    # "Missing signing key for account G...".
     ORG_ID="$(stellar contract invoke \
         --id "${FACTORY_ADDRESS}" \
         --source-account "${DEPLOYER}" \
@@ -57,8 +68,8 @@ if [ "${1:-}" = "deploy-treasury" ]; then
         -- \
         deploy_treasury \
         --name "Charter Test Org" \
-        --admin "${ADMIN_ADDRESS}" \
-        --approvers "[\"${APPROVER_ADDRESS}\",\"${APPROVER2_ADDRESS}\"]" \
+        --admin "${ADMIN}" \
+        --approvers-file-path "${APPROVERS_JSON}" \
         --threshold 2 \
         --token "${TOKEN}" 2>&1 | tail -n 1)"
     echo "Deployed org id: ${ORG_ID}"
