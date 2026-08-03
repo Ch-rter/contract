@@ -71,6 +71,18 @@ fn test_initialize_twice_panics() {
 }
 
 #[test]
+#[should_panic(expected = "HostError")]
+fn test_initialize_requires_deployer_auth() {
+    let env = Env::default();
+    env.mock_auths(&[]);
+    let deployer = Address::generate(&env);
+    let contract_id = env.register(FactoryContract, ());
+    let client = FactoryContractClient::new(&env, &contract_id);
+    let wasm_hash = env.deployer().upload_contract_wasm(super::treasury_wasm::WASM);
+    client.initialize(&deployer, &wasm_hash);
+}
+
+#[test]
 fn test_deploy_treasury_assigns_id_and_emits_event() {
     let ctx = TestContext::new();
     let name = String::from_str(&ctx.env, "Charter Org");

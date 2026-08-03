@@ -127,6 +127,24 @@ fn test_initialize_threshold_exceeds_approvers_panics() {
 }
 
 #[test]
+#[should_panic(expected = "HostError")]
+fn test_initialize_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_auths(&[]);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let contract_id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &contract_id);
+    client.initialize(
+        &admin,
+        &Vec::from_array(&env, [Address::generate(&env)]),
+        &1,
+        &token_contract.address(),
+    );
+}
+
+#[test]
 fn test_add_approver_appends_and_is_idempotent() {
     let ctx = TestContext::new(1);
     let new_approver = Address::generate(&ctx.env);
@@ -316,6 +334,21 @@ fn test_submit_request_cap_exceeded_panics() {
         &id,
         &ctx.recipient,
         &5_001,
+        &String::from_str(&ctx.env, "stipend"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_submit_request_requires_requester_auth() {
+    let ctx = TestContext::new(1);
+    let id = ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &5_000);
+    ctx.env.mock_auths(&[]);
+    ctx.client.submit_request(
+        &ctx.requester,
+        &id,
+        &ctx.recipient,
+        &1_000,
         &String::from_str(&ctx.env, "stipend"),
     );
 }
@@ -583,6 +616,13 @@ fn test_create_category_not_admin_panics() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_create_category_zero_cap_panics() {
+    let ctx = TestContext::new(1);
+    ctx.client.create_category(&ctx.admin, &String::from_str(&ctx.env, "Ops"), &0);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #3)")]
 fn test_update_category_cap_not_admin_panics() {
     let ctx = TestContext::new(1);
@@ -623,6 +663,15 @@ fn test_deposit_not_initialized_panics() {
 fn test_deposit_zero_amount_panics() {
     let ctx = TestContext::new(1);
     ctx.client.deposit(&ctx.requester, &0);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_deposit_requires_from_auth() {
+    let ctx = TestContext::new(1);
+    ctx.fund_treasury(5_000);
+    ctx.env.mock_auths(&[]);
+    ctx.client.deposit(&ctx.requester, &1_000);
 }
 
 #[test]
