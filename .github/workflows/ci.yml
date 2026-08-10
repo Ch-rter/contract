@@ -14,32 +14,20 @@ concurrency:
 jobs:
   build-and-test:
     name: build-and-test
-    # Windows runner: the repo pins a windows-gnu host toolchain
-    # (rust-toolchain.toml) and a mingw host linker (.cargo/config.toml).
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Rust (honors rust-toolchain.toml) + wasm target
-        shell: bash
         run: |
           rustup show
           rustup target add wasm32v1-none
-
-      - name: Toolchain diagnostics
-        shell: bash
-        run: |
-          rustc --version
-          cargo --version
-          gcc --version || true
-          x86_64-w64-mingw32-gcc --version || echo "mingw cross-gcc not on PATH"
 
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
 
       - name: Install Stellar CLI
-        shell: bash
         run: |
           cargo binstall -y stellar-cli@26.1.0
           stellar --version
@@ -47,9 +35,7 @@ jobs:
       # Build wasm first: the factory contractimport!s the treasury wasm at
       # compile time, so the treasury wasm must exist before `cargo test`.
       - name: Build contracts (wasm)
-        shell: bash
         run: stellar contract build
 
       - name: Run tests
-        shell: bash
         run: cargo test --workspace
