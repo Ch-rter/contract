@@ -40,7 +40,7 @@ Treasuries are normally created through the factory's `deploy_treasury`. The tre
 - [Rust](https://www.rust-lang.org/tools/install) `1.92.0` (pinned in `rust-toolchain.toml`, which also adds the `wasm32v1-none` target)
 - [Stellar CLI](https://developers.stellar.org/docs/tools/cli/install-cli) `26.x` (`stellar 26.1.0` is the tested version)
 
-> The pinned toolchain in `rust-toolchain.toml` targets a Windows (`windows-gnu`) build host. The contracts are platform-independent Soroban wasm; only the local build toolchain is currently pinned to Windows.
+> CI builds and tests on Linux, and the contracts are platform-independent Soroban wasm. `.cargo/config.toml` carries a Windows (`windows-gnu`) linker override for contributors who build natively on Windows; it is inert on other hosts.
 
 ### Build and test
 
