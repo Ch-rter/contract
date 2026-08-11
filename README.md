@@ -101,6 +101,157 @@ Caps are lifetime totals: a category tracks cumulative `spent` against its `cap`
 
 The factory is initialized once with the treasury wasm hash. Each `deploy_treasury` call deploys a treasury at a deterministic address (salted by a sequential org id), initializes it, and records an on-chain org registry entry. Reads are available through `get_org`, `get_org_count`, and the paginated `get_orgs`.
 
+## Contract reference
+
+Every entry point below is a public contract function. The `env: Env` host parameter is injected by the runtime, so signatures are shown as a caller sees them — e.g. `client.initialize(&admin, &approvers, &threshold, &token)` from a generated client, or `stellar contract invoke … -- initialize --admin … --approvers … --threshold … --token …` from the CLI. All `i128` amounts are in the token's smallest unit (scaled by its `decimals`).
+
+### Treasury
+
+Per-organization vault. Configuration (admin, approvers, threshold, token) lives in instance storage; categories and requests live in persistent storage.
+
+**Configuration & approvers** — admin only:
+
+```rust
+fn initialize(admin: Address, approvers: Vec<Address>, threshold: u32, token: Address)
+fn add_approver(admin: Address, approver: Address)     // no-op if already an approver
+fn remove_approver(admin: Address, approver: Address)  // fails if it would drop below threshold
+fn set_threshold(admin: Address, threshold: u32)
+```
+
+**Budget categories** — admin only:
+
+```rust
+fn create_category(admin: Address, name: String, cap: i128) -> u32       // cap > 0; returns category_id
+fn update_category_cap(admin: Address, category_id: u32, new_cap: i128)   // new_cap >= spent
+fn set_category_active(admin: Address, category_id: u32, active: bool)
+```
+
+**Funds & requests:**
+
+```rust
+fn deposit(from: Address, amount: i128)                                   // auth: from
+fn submit_request(requester: Address, category_id: u32, recipient: Address, amount: i128, memo: String) -> u32  // auth: requester; returns request_id
+fn approve_request(approver: Address, request_id: u32)                    // auth: approver; auto-executes at threshold
+fn reject_request(approver: Address, request_id: u32)                     // auth: approver
+fn cancel_request(requester: Address, request_id: u32)                    // auth: original requester
+```
+
+**Views** (no auth):
+
+```rust
+fn get_category(category_id: u32) -> Category
+fn get_categories() -> Vec<Category>
+fn get_request(request_id: u32) -> Request
+fn get_requests_by_category(category_id: u32) -> Vec<Request>
+fn get_balance() -> i128
+fn get_approvers() -> Vec<Address>
+fn get_threshold() -> u32
+```
+
+> `get_categories` and `get_requests_by_category` iterate every entity with no upper bound; on treasuries with many categories or requests they can exceed transaction resource limits. Pagination is tracked in [issue #3](https://github.com/Ch-rter/contract/issues/3).
+
+**Data types:**
+
+```rust
+struct Category { name: String, cap: i128, spent: i128, active: bool }
+
+enum RequestStatus { Pending, Executed, Rejected, Cancelled }
+
+struct Request {
+    id: u32,
+    category_id: u32,
+    recipient: Address,
+    amount: i128,
+    memo: String,
+    requester: Address,
+    approvals: Vec<Address>,
+    status: RequestStatus,
+    created_ledger: u32,
+}
+```
+
+**Events:**
+
+| Event | Topics | Data |
+|-------|--------|------|
+| `CategoryCreated` | `category_id` | `name`, `cap` |
+| `CapUpdated` | `category_id` | `new_cap` |
+| `ActiveChanged` | `category_id` | `active` |
+| `Deposited` | `from` | `amount` |
+| `RequestSubmitted` | `request_id` | `category_id`, `recipient`, `amount` |
+| `RequestApproved` | `request_id` | `approver` |
+| `RequestExecuted` | `request_id` | `recipient`, `amount` |
+| `RequestRejected` | `request_id` | `approver` |
+| `RequestCancelled` | `request_id` | — |
+
+**Errors:**
+
+| Code | Name | Raised when |
+|------|------|-------------|
+| 1 | `AlreadyInitialized` | `initialize` is called a second time |
+| 2 | `NotInitialized` | a function is called before `initialize` |
+| 3 | `NotAdmin` | a non-admin calls an admin-only function |
+| 4 | `NotApprover` | approve/reject is called by an address outside the approver set |
+| 5 | `CategoryInactive` | a request is submitted against an inactive category |
+| 6 | `CapExceeded` | reserved — cap overruns currently surface as `InvalidAmount` |
+| 7 | `RequestNotPending` | the target request is not pending (or does not exist) |
+| 8 | `InvalidThreshold` | threshold is 0, exceeds the approver count, or a removal would drop below it |
+| 9 | `AlreadyApproved` | the same approver approves a request twice |
+| 10 | `NotRequester` | a non-submitter tries to cancel a request |
+| 11 | `InvalidAmount` | non-positive amount, insufficient remaining cap, or unknown category |
+
+### Factory
+
+Deploys treasuries from a single uploaded treasury wasm and records each as an org. Deploy authority is a single `deployer` account.
+
+```rust
+fn initialize(deployer: Address, wasm_hash: BytesN<32>)                   // auth: deployer
+fn deploy_treasury(name: String, admin: Address, approvers: Vec<Address>, threshold: u32, token: Address) -> u32  // auth: deployer + admin; returns org_id
+fn get_org(org_id: u32) -> OrgRecord
+fn get_org_count() -> u32
+fn get_orgs(start: u32, limit: u32) -> Vec<OrgRecord>                     // limit capped at 50
+```
+
+`deploy_treasury` requires **both** the `deployer` and the new treasury's `admin` to sign: the admin signature is needed because the factory immediately sub-calls the treasury's `initialize`, which itself requires `admin` auth. The org id doubles as the deploy salt, so every treasury address is deterministic.
+
+**Data types:**
+
+```rust
+struct OrgRecord { name: String, treasury: Address, admin: Address, created_ledger: u32 }
+```
+
+**Events:**
+
+| Event | Topics | Data |
+|-------|--------|------|
+| `TreasuryDeployed` | `org_id` | `name`, `treasury`, `admin` |
+
+> `initialize` does not currently emit an event; adding `FactoryInitialized` is tracked in [issue #2](https://github.com/Ch-rter/contract/issues/2).
+
+**Errors:**
+
+| Code | Name | Raised when |
+|------|------|-------------|
+| 1 | `NotInitialized` | `deploy_treasury` is called before `initialize` |
+| 2 | `AlreadyInitialized` | `initialize` is called a second time |
+| 3 | `NotDeployer` | reserved — deploy authority is enforced via `require_auth` on the stored deployer |
+| 4 | `OrgNotFound` | `get_org` is called with an unknown id |
+
+### Test token
+
+`contracts/test-token` is a minimal mintable token used only by the test suite and the on-chain verification scripts — it is **not** part of the production surface (see [SECURITY.md](SECURITY.md)). It implements just enough of a token interface for a treasury to hold and move balances:
+
+```rust
+fn init(admin: Address, decimal: u32, name: String, symbol: String)
+fn mint(to: Address, amount: i128)                       // auth: admin
+fn transfer(from: Address, to: Address, amount: i128)    // auth: from
+fn balance(id: Address) -> i128
+fn decimals() -> u32
+fn name() -> String
+fn symbol() -> String
+fn admin() -> Address
+```
+
 ## Contributing
 
 Contributions are welcome. To get started:
