@@ -1,4 +1,4 @@
-use crate::{FactoryContract, FactoryContractClient, TreasuryContractClient};
+use crate::{Error, FactoryContract, FactoryContractClient, TreasuryContractClient};
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{vec, Address, Env, IntoVal, String, Symbol};
 
@@ -212,6 +212,29 @@ fn test_deploy_treasury_not_deployer_panics() {
         &1,
         &token_contract.address(),
     );
+}
+
+#[test]
+fn test_deploy_treasury_invalid_threshold_returns_factory_error() {
+    let ctx = TestContext::new();
+    // Threshold above the approver count: the treasury rejects it with its own
+    // InvalidThreshold (#8), which must surface as the factory's error instead.
+    let result = ctx.client.try_deploy_treasury(
+        &String::from_str(&ctx.env, "Charter Org"),
+        &ctx.admin,
+        &vec![&ctx.env, ctx.approver1.clone(), ctx.approver2.clone()],
+        &3,
+        &ctx.token,
+    );
+    assert_eq!(result, Err(Ok(Error::TreasuryInitFailed.into())));
+    assert_eq!(ctx.client.get_org_count(), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_deploy_treasury_zero_threshold_panics() {
+    let ctx = TestContext::new();
+    deploy_org(&ctx, "Charter Org", 0);
 }
 
 #[test]

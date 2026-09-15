@@ -11,4 +11,7 @@ pub enum Error {
     NotDeployer = 3,
     /// Org id does not exist.
     OrgNotFound = 4,
+    /// The new treasury's `initialize` sub-call failed. Wraps any treasury
+    /// error so treasury codes never surface as factory codes.
+    TreasuryInitFailed = 5,
 }
