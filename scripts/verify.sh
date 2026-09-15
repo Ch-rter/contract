@@ -75,13 +75,27 @@ if [ "${1:-}" = "deploy-treasury" ]; then
     echo "Deployed org id: ${ORG_ID}"
 
     echo "=== Org record ==="
-    stellar contract invoke \
-        --id "${FACTORY_ADDRESS}" \
-        --source-account "${DEPLOYER}" \
-        --network "${NETWORK}" \
-        -- \
-        get_org \
-        --org_id "${ORG_ID}"
+    # deploy_treasury and get_org are separate RPC round-trips; on a slow testnet the
+    # read can race deploy propagation and return OrgNotFound. Poll briefly (#5).
+    ORG_READ_OK=0
+    for attempt in 1 2 3 4 5 6; do
+        if stellar contract invoke \
+            --id "${FACTORY_ADDRESS}" \
+            --source-account "${DEPLOYER}" \
+            --network "${NETWORK}" \
+            -- \
+            get_org \
+            --org_id "${ORG_ID}"; then
+            ORG_READ_OK=1
+            break
+        fi
+        echo "get_org attempt ${attempt} failed; retrying in 2s..." >&2
+        sleep 2
+    done
+    if [ "${ORG_READ_OK}" -ne 1 ]; then
+        echo "get_org failed after retries for org id ${ORG_ID}" >&2
+        exit 1
+    fi
 fi
 
 echo
