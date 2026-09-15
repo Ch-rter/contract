@@ -24,33 +24,38 @@ use treasury_wasm::Client as TreasuryContractClient;
 
 const MAX_ORG_LIMIT: u32 = 50;
 
+/// Minimum number of ledgers between two successful `deploy_treasury` calls
+/// by the same admin (about one hour at ~5 s per ledger).
+pub const DEPLOY_COOLDOWN_LEDGERS: u32 = 720;
+
 /// Charter factory contract.
 ///
-/// Deploys and tracks treasury contracts from an uploaded treasury wasm. The
-/// deployer authorizes every deployment; org ids are assigned sequentially and
-/// used as the deploy salt so addresses are deterministic.
+/// Deploys and tracks treasury contracts from an uploaded treasury wasm, whose
+/// hash is fixed by the constructor when the factory itself is created.
+/// Deployment is permissionless: any account can create an org by signing as
+/// that org's own `admin`, and each admin can deploy at most once per
+/// `DEPLOY_COOLDOWN_LEDGERS`. Org ids are assigned sequentially and used as the
+/// deploy salt so addresses are deterministic.
 #[contract]
 pub struct FactoryContract;
 
 #[contractimpl]
 impl FactoryContract {
-    /// Initializes the factory.
+    /// Creates the factory and binds it to the treasury wasm it deploys.
+    ///
+    /// Runs exactly once, inside the transaction that creates the contract, so
+    /// the wasm hash is set atomically at deploy. The host rejects any later
+    /// call to `__constructor`, and no other function writes the hash, so
+    /// nobody can set or replace it after deployment.
     ///
     /// # Arguments
-    /// * `deployer` - The address authorized to deploy treasuries.
-    /// * `wasm_hash` - Hash of the treasury wasm to deploy.
+    /// * `wasm_hash` - Hash of the treasury wasm to deploy. Upload that wasm
+    ///   first; the constructor does not check that it exists.
     ///
     /// # Auth
-    /// * Requires `deployer.require_auth()`.
-    ///
-    /// # Panics
-    /// * `Error::AlreadyInitialized` if already initialized.
-    pub fn initialize(env: Env, deployer: Address, wasm_hash: BytesN<32>) {
-        deployer.require_auth();
-        if env.storage().instance().has(&DataKey::Deployer) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
-        }
-        env.storage().instance().set(&DataKey::Deployer, &deployer);
+    /// * None. Whoever creates the contract chooses the hash, as part of the
+    ///   creation itself.
+    pub fn __constructor(env: Env, wasm_hash: BytesN<32>) {
         env.storage().instance().set(&DataKey::WasmHash, &wasm_hash);
         env.storage().instance().set(&DataKey::OrgCount, &0u32);
         Self::extend_instance_ttl(&env);
@@ -74,13 +79,17 @@ impl FactoryContract {
     /// * The newly assigned org id.
     ///
     /// # Auth
-    /// * Requires the stored `deployer` to sign (`Error::NotDeployer`
-    ///   otherwise).
-    /// * Requires `admin` to sign so the treasury's `initialize` sub-call
-    ///   succeeds on-chain.
+    /// * Requires `admin` to sign, and nothing else: any account can create an
+    ///   org it administers. The same signature covers the treasury's
+    ///   `initialize` sub-call, which also requires `admin`.
+    ///
+    /// # Rate limit
+    /// * Each `admin` can deploy at most once per `DEPLOY_COOLDOWN_LEDGERS`.
+    ///   A deploy that fails does not start the cooldown.
     ///
     /// # Panics
-    /// * `Error::NotInitialized` if the factory was not initialized.
+    /// * `Error::DeployCooldown` if `admin` deployed an org less than
+    ///   `DEPLOY_COOLDOWN_LEDGERS` ledgers ago.
     /// * `Error::TreasuryInitFailed` if the treasury's `initialize` fails for
     ///   any reason (e.g. an invalid threshold). The treasury's own error code
     ///   is not propagated.
@@ -92,21 +101,23 @@ impl FactoryContract {
         threshold: u32,
         token: Address,
     ) -> u32 {
-        let deployer: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Deployer)
-            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
-        deployer.require_auth();
-        // The treasury's `initialize` calls `admin.require_auth()`. Requiring
-        // the admin's signature at the top invocation ties it to the root call
-        // so the sub-call auth succeeds.
-        admin.require_auth();
+        // Always present: the constructor sets it when the contract is created.
         let wasm_hash: BytesN<32> = env
             .storage()
             .instance()
             .get(&DataKey::WasmHash)
-            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+            .unwrap();
+        // The org's own admin is the only required signer. The treasury's
+        // `initialize` also calls `admin.require_auth()`; requiring it at the
+        // top invocation ties it to the root call so the sub-call auth succeeds.
+        admin.require_auth();
+
+        let cooldown_key = DataKey::LastDeploy(admin.clone());
+        if let Some(last_deploy) = env.storage().temporary().get::<_, u32>(&cooldown_key) {
+            if env.ledger().sequence() < last_deploy.saturating_add(DEPLOY_COOLDOWN_LEDGERS) {
+                panic_with_error!(&env, Error::DeployCooldown);
+            }
+        }
 
         let org_id: u32 = env
             .storage()
@@ -137,6 +148,18 @@ impl FactoryContract {
             Ok(Ok(())) => {}
             _ => panic_with_error!(&env, Error::TreasuryInitFailed),
         }
+
+        // Start this admin's cooldown. Only reached on success: a failed
+        // deploy panics and reverts, so it never locks the admin out. The
+        // entry is temporary because it only has to outlive the window.
+        env.storage()
+            .temporary()
+            .set(&cooldown_key, &env.ledger().sequence());
+        env.storage().temporary().extend_ttl(
+            &cooldown_key,
+            DEPLOY_COOLDOWN_LEDGERS,
+            DEPLOY_COOLDOWN_LEDGERS,
+        );
 
         env.storage().instance().set(&DataKey::OrgCount, &org_id);
         env.storage().persistent().set(

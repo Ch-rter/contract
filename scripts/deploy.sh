@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Deploys the charter factory contract to a Stellar network and initializes it.
+# Deploys the charter factory contract to a Stellar network.
 #
 # The treasury wasm is uploaded first; its hash is passed to the factory's
-# `initialize` so the factory can deploy treasury instances. The resulting
+# constructor, so it is set in the same transaction that creates the factory
+# and no one can set a different hash first. The resulting
 # factory address and treasury wasm hash are written to scripts/.env so that
 # verify.sh can use them.
 #
@@ -39,19 +40,13 @@ FACTORY_ADDRESS="$(stellar contract deploy \
     --wasm "${FACTORY_WASM}" \
     --source-account "${DEPLOYER}" \
     --network "${NETWORK}" \
+    -- \
+    --wasm_hash "${TREASURY_HASH}" \
     2>&1 | tail -n 1)"
 echo "Factory address: ${FACTORY_ADDRESS}"
-
-echo "=== Initializing factory ==="
-DEPLOYER_ADDRESS="$(stellar keys public-key "${DEPLOYER}")"
-stellar contract invoke \
-    --id "${FACTORY_ADDRESS}" \
-    --source-account "${DEPLOYER}" \
-    --network "${NETWORK}" \
-    -- \
-    initialize \
-    --deployer "${DEPLOYER_ADDRESS}" \
-    --wasm_hash "${TREASURY_HASH}"
+# The arguments after `--` go to the factory's constructor, which runs inside
+# the creating transaction. There is no separate initialize step. DEPLOYER only
+# pays the fees; it has no role in the contract.
 
 cat > "${ENV_FILE}" <<EOF
 NETWORK="${NETWORK}"
