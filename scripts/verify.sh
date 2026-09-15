@@ -2,7 +2,7 @@
 # Verifies the charter factory deployment by exercising its read paths.
 #
 # Loads the factory address and treasury wasm hash from scripts/.env (written
-# by deploy.sh) and confirms the factory is initialized, reports an org count,
+# by deploy.sh) and confirms the factory responds, reports an org count,
 # and can deploy + return an org record.
 #
 # Usage: ./scripts/verify.sh [deploy-treasury]

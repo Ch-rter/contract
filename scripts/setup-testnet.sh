@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prepares identities on Stellar testnet for the charter contracts.
 #
-# Creates three identities if they don't exist and funds them via the testnet
-# friendbot: the deployer (owns the factory), the org admin, and an approver.
+# Creates the identities below if they don't exist and funds them via the
+# testnet friendbot: the deployer (pays to deploy the factory; it has no role in
+# the contract), the org admin, two approvers, and a requester.
 #
 # Usage: ./scripts/setup-testnet.sh
 set -euo pipefail

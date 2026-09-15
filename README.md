@@ -33,6 +33,8 @@ Network: **Testnet** (`Test SDF Network ; September 2015`)
 
 Treasuries are normally created through the factory's `deploy_treasury`. The treasury above is one reference deployment kept for verification; both wasm hashes are reproducible from `stellar contract fetch`.
 
+> The factory listed above predates permissionless deployment and the constructor: it still requires its original deployer to sign every `deploy_treasury`, and it was bound to its wasm hash by a separate `initialize` call. The current source does neither, and has not been deployed yet.
+
 ## Quick start
 
 ### Prerequisites
@@ -48,7 +50,7 @@ Treasuries are normally created through the factory's `deploy_treasury`. The tre
 # Compile the contracts to wasm
 stellar contract build
 
-# Run the test suite (47 treasury + 11 factory = 58 tests)
+# Run the test suite (47 treasury + 17 factory = 64 tests)
 cargo test
 ```
 
@@ -60,7 +62,8 @@ The scripts under `scripts/` deploy and exercise the contracts end to end. Run t
 # 1. Create and fund testnet identities (deployer, admin, approvers, requester)
 ./scripts/setup-testnet.sh
 
-# 2. Build, upload the treasury wasm, deploy the factory, and initialize it.
+# 2. Build, upload the treasury wasm, and deploy the factory with that hash as a
+#    constructor argument (one step; there is no separate initialize).
 #    Writes the resulting factory address + treasury wasm hash to scripts/.env
 ./scripts/deploy.sh
 
@@ -70,7 +73,7 @@ The scripts under `scripts/` deploy and exercise the contracts end to end. Run t
 ./scripts/verify.sh deploy-treasury
 ```
 
-The factory must be initialized with the treasury's wasm hash before it can deploy treasuries — `deploy.sh` handles this ordering (upload treasury wasm → deploy factory → `initialize`).
+The treasury wasm must be uploaded before the factory is deployed, because its hash is a constructor argument: `deploy.sh` uploads the treasury wasm, then deploys the factory with `-- --wasm_hash <hash>`. The hash is set in the same transaction that creates the factory, so no one can set a different one first.
 
 ## Architecture
 
@@ -81,7 +84,7 @@ contracts/
 └── test-token/    # Minimal mintable token used only in tests and verification
 scripts/
 ├── setup-testnet.sh   # Create + fund testnet identities
-├── deploy.sh          # Build, upload, deploy, initialize
+├── deploy.sh          # Build, upload, deploy (wasm hash via constructor)
 └── verify.sh          # Exercise factory read/deploy paths on-chain
 ```
 
@@ -99,7 +102,7 @@ Caps are lifetime totals: a category tracks cumulative `spent` against its `cap`
 
 ### Factory
 
-The factory is initialized once with the treasury wasm hash. Each `deploy_treasury` call deploys a treasury at a deterministic address (salted by a sequential org id), initializes it, and records an on-chain org registry entry. Reads are available through `get_org`, `get_org_count`, and the paginated `get_orgs`.
+The factory's constructor binds it to the treasury wasm hash when the factory is deployed. Each `deploy_treasury` call deploys a treasury at a deterministic address (salted by a sequential org id), initializes it, and records an on-chain org registry entry. Reads are available through `get_org`, `get_org_count`, and the paginated `get_orgs`.
 
 ## Contract reference
 
@@ -202,17 +205,21 @@ struct Request {
 
 ### Factory
 
-Deploys treasuries from a single uploaded treasury wasm and records each as an org. Deploy authority is a single `deployer` account.
+Deploys treasuries from a single uploaded treasury wasm and records each as an org. Org creation is permissionless: any account can deploy a treasury for an org it administers by signing as that org's `admin`. There is no factory-level deployer or operator.
 
 ```rust
-fn initialize(deployer: Address, wasm_hash: BytesN<32>)                   // auth: deployer
-fn deploy_treasury(name: String, admin: Address, approvers: Vec<Address>, threshold: u32, token: Address) -> u32  // auth: deployer + admin; returns org_id
+fn __constructor(wasm_hash: BytesN<32>)                                   // runs once, when the factory is deployed; not callable afterwards
+fn deploy_treasury(name: String, admin: Address, approvers: Vec<Address>, threshold: u32, token: Address) -> u32  // auth: admin; per-admin cooldown; returns org_id
 fn get_org(org_id: u32) -> OrgRecord
 fn get_org_count() -> u32
 fn get_orgs(start: u32, limit: u32) -> Vec<OrgRecord>                     // limit capped at 50
 ```
 
-`deploy_treasury` requires **both** the `deployer` and the new treasury's `admin` to sign: the admin signature is needed because the factory immediately sub-calls the treasury's `initialize`, which itself requires `admin` auth. The org id doubles as the deploy salt, so every treasury address is deterministic.
+`deploy_treasury` requires only the new treasury's `admin` to sign. That signature also covers the factory's sub-call to the treasury's `initialize`, which itself requires `admin` auth. The org id doubles as the deploy salt, so every treasury address is deterministic.
+
+**Spam limit:** each `admin` address can deploy at most one org per `DEPLOY_COOLDOWN_LEDGERS` (720 ledgers, about an hour). A deploy that fails does not start the cooldown. The limit throttles a single admin identity; it does not stop someone who uses many admin accounts. Every deploy also costs the caller network fees and storage rent.
+
+**Deployment:** the treasury wasm hash is a constructor argument (`stellar contract deploy … -- --wasm_hash <hash>`), so it is set in the same transaction that creates the factory. There is no `initialize` step, and nothing can set or replace the hash afterwards. The constructor does not check that the hash has been uploaded, so upload the treasury wasm first.
 
 **Data types:**
 
@@ -226,17 +233,18 @@ struct OrgRecord { name: String, treasury: Address, admin: Address, created_ledg
 |-------|--------|------|
 | `TreasuryDeployed` | `org_id` | `name`, `treasury`, `admin` |
 
-> `initialize` does not currently emit an event; adding `FactoryInitialized` is tracked in [issue #2](https://github.com/Ch-rter/contract/issues/2).
+> Creating the factory does not emit an event; [issue #2](https://github.com/Ch-rter/contract/issues/2) tracks adding one (it predates the constructor and still refers to `initialize`).
 
 **Errors:**
 
 | Code | Name | Raised when |
 |------|------|-------------|
-| 1 | `NotInitialized` | `deploy_treasury` is called before `initialize` |
-| 2 | `AlreadyInitialized` | `initialize` is called a second time |
-| 3 | `NotDeployer` | reserved — deploy authority is enforced via `require_auth` on the stored deployer |
+| 1 | — | retired (was `NotInitialized`; the constructor sets the wasm hash, so a factory can't be uninitialized); not reused |
+| 2 | — | retired (was `AlreadyInitialized`; there is no `initialize` to call twice); not reused |
+| 3 | — | retired (was `NotDeployer`, removed when deployment became permissionless); not reused |
 | 4 | `OrgNotFound` | `get_org` is called with an unknown id |
 | 5 | `TreasuryInitFailed` | the new treasury's `initialize` fails (e.g. invalid threshold); the treasury's own error code is not passed through |
+| 6 | `DeployCooldown` | the same `admin` deploys again less than `DEPLOY_COOLDOWN_LEDGERS` after its last successful deploy |
 
 ### Test token
 

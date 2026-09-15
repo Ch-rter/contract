@@ -2,14 +2,15 @@ use soroban_sdk::{contracttype, Address, String};
 
 /// Storage keys for the factory contract.
 ///
-/// Instance storage holds configuration that rarely changes (deployer, treasury
-/// wasm hash, org count). Persistent storage holds the per-org records.
+/// Instance storage holds configuration that rarely changes (treasury wasm
+/// hash, org count). Persistent storage holds the per-org records. Temporary
+/// storage holds each admin's last deploy ledger for the deploy cooldown.
 #[contracttype]
 pub enum DataKey {
-    Deployer,
     WasmHash,
     OrgCount,
     Org(u32),
+    LastDeploy(Address),
 }
 
 /// A record of a treasury deployed through the factory.
