@@ -236,6 +236,7 @@ struct OrgRecord { name: String, treasury: Address, admin: Address, created_ledg
 | 2 | `AlreadyInitialized` | `initialize` is called a second time |
 | 3 | `NotDeployer` | reserved — deploy authority is enforced via `require_auth` on the stored deployer |
 | 4 | `OrgNotFound` | `get_org` is called with an unknown id |
+| 5 | `TreasuryInitFailed` | the new treasury's `initialize` fails (e.g. invalid threshold); the treasury's own error code is not passed through |
 
 ### Test token
 

@@ -81,6 +81,9 @@ impl FactoryContract {
     ///
     /// # Panics
     /// * `Error::NotInitialized` if the factory was not initialized.
+    /// * `Error::TreasuryInitFailed` if the treasury's `initialize` fails for
+    ///   any reason (e.g. an invalid threshold). The treasury's own error code
+    ///   is not propagated.
     pub fn deploy_treasury(
         env: Env,
         name: String,
@@ -121,12 +124,19 @@ impl FactoryContract {
                 .with_current_contract(salt)
                 .deploy_v2(wasm_hash, ());
 
-        TreasuryContractClient::new(&env, &treasury).initialize(
+        // Treasury and factory error codes overlap with different meanings, so
+        // a treasury failure must not propagate as-is. Any failure (contract
+        // error, auth or host error) is reported as `TreasuryInitFailed`; the
+        // panic rolls back the deployment above along with everything else.
+        match TreasuryContractClient::new(&env, &treasury).try_initialize(
             &admin,
             &approvers,
             &threshold,
             &token,
-        );
+        ) {
+            Ok(Ok(())) => {}
+            _ => panic_with_error!(&env, Error::TreasuryInitFailed),
+        }
 
         env.storage().instance().set(&DataKey::OrgCount, &org_id);
         env.storage().persistent().set(
