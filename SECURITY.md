@@ -50,7 +50,7 @@ Out of scope:
 
 - `contracts/test-token`, which is a minimal token used only for tests and
   on-chain verification and is not intended for production use.
-- Issues that require a compromised deployer key, admin key, or approver key.
+- Issues that require a compromised admin key or approver key.
   Charter's security model assumes these signers are honest and their keys are
   kept secret; loss or compromise of a threshold of keys is outside the trust
   model.
